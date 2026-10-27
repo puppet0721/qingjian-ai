@@ -6,9 +6,12 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
@@ -16,6 +19,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import app.qingjian.inputmethod.R
 import app.qingjian.inputmethod.candidates.CandidateBarView
+import app.qingjian.inputmethod.candidates.EmojiMap
 import app.qingjian.inputmethod.candidates.Toolbar
 import app.qingjian.inputmethod.clipboard.ClipboardImageProvider
 import app.qingjian.inputmethod.clipboard.ClipboardWatcher
@@ -45,6 +49,15 @@ import app.qingjian.inputmethod.service.input.wantsPrivacy
 import app.qingjian.inputmethod.settings.BottomAction
 import app.qingjian.inputmethod.settings.Settings
 import app.qingjian.inputmethod.settings.page.KeyboardSettingsActivity
+import app.qingjian.inputmethod.solve.ExtractText
+import app.qingjian.inputmethod.solve.FloatingBall
+import app.qingjian.inputmethod.solve.FloatingBallService
+import app.qingjian.inputmethod.solve.SolveBar
+import app.qingjian.inputmethod.solve.SolveCaptureActivity
+import app.qingjian.inputmethod.solve.SolveCaptureService
+import app.qingjian.inputmethod.solve.SolveClient
+import app.qingjian.inputmethod.solve.SolveFlow
+import app.qingjian.inputmethod.solve.SolveShot
 import app.qingjian.inputmethod.theme.Palette
 import app.qingjian.inputmethod.translate.QuickTranslate
 import app.qingjian.inputmethod.translate.TranslateBar
@@ -54,6 +67,16 @@ import app.qingjian.inputmethod.voice.VoiceInput
 /** 输入法服务：管生命周期、设置与视图，输入逻辑在 [Composer]。 */
 class QingjianInputMethodService :
     InputMethodService(), Composer.Host, CandidateBarView.Listener, KeyboardView.Listener, PanelActions, VoiceInput.Host {
+
+    companion object {
+        /** 活着的服务实例（同进程的悬浮球读它的实时透明度等运行态）；进程里至多一个。 */
+        @Volatile var current: QingjianInputMethodService? = null
+            private set
+    }
+
+    init {
+        current = this
+    }
     private lateinit var engine: Engine
     private lateinit var composer: Composer
     private var panel: InputPanel? = null
@@ -77,6 +100,9 @@ class QingjianInputMethodService :
     private var editor: FloatingEditor? = null
 
     private lateinit var quickTranslate: QuickTranslate
+
+    /** AI 搜题：工具栏放大镜开搜题条，题目发云端大模型，答案显示在搜题条里（不进输入框）。 */
+    private lateinit var solveFlow: SolveFlow
 
     /** 语音输入：长按空格、工具栏话筒、全面屏底栏的语音键都进它。 */
     private lateinit var voice: VoiceInput
@@ -119,6 +145,8 @@ class QingjianInputMethodService :
 
     override fun onCreate() {
         super.onCreate()
+        // emoji 联想表先读进来（几百条，很快）；读不出来就当没有，不影响打字
+        EmojiMap.load(this)
         engine = Engine(this) {
             composer.onEngineReady()
             syncCloud()
@@ -126,6 +154,7 @@ class QingjianInputMethodService :
         }
         composer = Composer(engine, this)
         quickTranslate = QuickTranslate(engine) { currentInputConnection }
+        solveFlow = SolveFlow(this, SolveClient(this))
         voice = VoiceInput(this, engine, this)
         Settings.load(this).let { settings ->
             composer.restoreLanguages(
@@ -146,6 +175,7 @@ class QingjianInputMethodService :
         SecretStore.prefs(this).unregisterOnSharedPreferenceChangeListener(cloudListener)
         VoiceConfig.prefs(this).unregisterOnSharedPreferenceChangeListener(voiceListener)
         engine.close()
+        if (current === this) current = null
         super.onDestroy()
     }
 
@@ -153,6 +183,8 @@ class QingjianInputMethodService :
         // 键盘重建，开着的语音面板跟着没了
         voice.cancel()
         val settings = Settings.load(this)
+        solveOverlay = settings.solveOverlay
+        applyPrivacy(settings)
         composer.layout = settings.layout
         composer.traditional = settings.traditional
         composer.keepChinese = settings.keepChinese
@@ -178,6 +210,43 @@ class QingjianInputMethodService :
         reopenPanel?.let(panel::open)
         reopenPanel = null
         return panel.view
+    }
+
+    /**
+     * 隐私模式：给输入法窗口挂 FLAG_SECURE——录屏（MediaProjection）照常进行，键盘在画面里是黑块，
+     * 其余内容照录；部分系统的「系统截屏」会被整单拒绝（平台行为，App 侧没有「只挡键盘不挡截屏」的 API）。
+     * 开关改动会重建键盘（settingsListener），重建时在这里重新挂。
+     */
+    private fun applyPrivacy(settings: Settings) {
+        val window = getWindow().window ?: return
+        if (settings.privacy) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
+    /** 答题模式开关（onCreateInputView 时缓存，setToggle 重建键盘时刷新）；搜题条开着时 insets 报零。 */
+    private var solveOverlay = false
+
+    /**
+     * 答题模式：搜题条开着时搜题条与键盘整体浮在页面上——内容与可见 inset 报成窗口底，
+     * App 不缩不滚（adjustResize/adjustPan 都不触发）；可点区域仍是键盘那一块，
+     * 浮层上方的页面照常可点。关掉搜题条或没开答题模式就走默认（把页面顶起来）。
+     */
+    override fun onComputeInsets(outInsets: InputMethodService.Insets) {
+        super.onComputeInsets(outInsets)
+        val view = panel?.view ?: return
+        val loc = IntArray(2)
+        view.getLocationInWindow(loc)
+        val overlay = solveOverlay && editor is SolveBar
+        android.util.Log.d(
+            "SolveShot",
+            "insets overlay=$overlay decorH=${getWindow().window?.decorView?.height} viewTop=${loc[1]} viewH=${view.height} content=${outInsets.contentTopInsets} visible=${outInsets.visibleTopInsets}",
+        )
+        if (!overlay) return
+        val decor = getWindow().window?.decorView ?: return
+        outInsets.contentTopInsets = decor.height
+        outInsets.visibleTopInsets = decor.height
+        outInsets.touchableInsets = InputMethodService.Insets.TOUCHABLE_INSETS_REGION
+        outInsets.touchableRegion.set(0, loc[1], decor.width, decor.height)
     }
 
     /** 深浅色跟着系统变。 */
@@ -250,6 +319,15 @@ class QingjianInputMethodService :
         openPanel(PanelKind.CANDIDATES)
         panel?.showCandidates(shownPreedit, shownCandidates)
     }
+
+    /** 候选条尾部的 emoji 芯片：丢掉组句，直接上屏这个 emoji。 */
+    override fun onEmoji(emoji: String) = composer.commitEmoji(emoji)
+
+    /**
+     * 给悬浮球侧的语音问答用：它要复用引擎的云端识别（[app.qingjian.inputmethod.voice.EngineRecognizer]），
+     * 但引擎只在这个服务里。引擎还没装好时返回 null，那边会退到系统识别。
+     */
+    fun engineForVoice(): Engine? = if (engine.ready) engine else null
 
     override fun selectCandidate(index: Int) = composer.select(index)
 
@@ -330,11 +408,25 @@ class QingjianInputMethodService :
         Toolbar.Action.SYMBOLS -> openPanel(PanelKind.SYMBOLS)
         Toolbar.Action.CLIPBOARD -> clipboard()
         Toolbar.Action.TRANSLATE -> toggleTranslate()
+        Toolbar.Action.SOLVE -> toggleSolve()
+        Toolbar.Action.SOLVE_SHOT -> startSolveShot()
+        Toolbar.Action.SWITCH -> switchInputMethod()
         Toolbar.Action.RESIZE -> startResize()
+        Toolbar.Action.EDIT -> openPanel(PanelKind.EDIT)
         Toolbar.Action.HIDE_KEYBOARD -> onHideKeyboard()
     }
 
     override fun openPanel(kind: PanelKind) {
+        // 编辑面板打开时量一次输入框：总长与光标位（此刻无选区，before 长度无歧义），扩选从这里算起
+        if (kind == PanelKind.EDIT) {
+            val ic = currentInputConnection
+            val before = ic?.getTextBeforeCursor(4096, 0)?.length ?: 0
+            val after = ic?.getTextAfterCursor(4096, 0)?.length ?: 0
+            editTextLength = before + after
+            editCursorEnd = before
+            selectionAnchor = before
+            editSelecting = false
+        }
         panel?.open(kind)
     }
 
@@ -379,6 +471,111 @@ class QingjianInputMethodService :
     override fun setToggle(key: String, on: Boolean) {
         reopenPanel = panel?.openPanel
         Settings.preferences(this).edit().putBoolean(key, on).apply()
+        // 悬浮球开关写完设置还要起停服务（见 solve/FloatingBallService.kt）
+        if (key == Settings.KEY_FLOATING_BALL) FloatingBall.syncService(this, on)
+    }
+
+    /** 透明度滑杆拖动中的预览值；非 null 时球的绘制优先读它（设置里的值还是拖动前的）。 */
+    private var previewBallOpacity: Int? = null
+
+    /** 球当前实际该用的透明度：拖动中读预览，否则读设置。 */
+    fun effectiveBallOpacity(): Int =
+        previewBallOpacity ?: Settings.load(this).ballOpacity
+
+    /** 拖「球透明度」滑杆中的实时预览：只推进存内存里的预览值并刷新球（球绘制自己读这份），不落盘、不重建键盘。 */
+    override fun previewBallOpacity(percent: Int) {
+        previewBallOpacity = percent.coerceIn(1, 100)
+        FloatingBall.refreshOpacity(this)
+    }
+
+    /** 滑杆松手：把最终值落盘；键盘不重建（面板还在，滑杆位置自己就是对的），球已经是实时值了。 */
+    override fun setBallOpacity(percent: Int) {
+        previewBallOpacity = null
+        writingSettings = true
+        Settings.preferences(this).edit().putInt(Settings.KEY_BALL_OPACITY, percent.coerceIn(1, 100)).apply()
+        writingSettings = false
+        FloatingBall.refreshOpacity(this)
+    }
+
+    override val shownBallOpacity: Int
+        get() = previewBallOpacity ?: Settings.load(this).ballOpacity
+
+    /** 悬浮球闲置多久缩成贴边小箭头（秒，0 = 不收起）；与球的其它运行态同存一份 prefs。 */
+    override val ballIdleSeconds: Int
+        get() = getSharedPreferences("floating_ball", MODE_PRIVATE)
+            .getInt(FloatingBallService.KEY_BALL_IDLE, FloatingBallService.DEFAULT_BALL_IDLE)
+
+    /** 换下一档：不收起 → 3 → 5 → 10 → 30 → 不收起；写完让球按新秒数重新计时。 */
+    override fun cycleBallIdle() {
+        val choices = FloatingBallService.BALL_IDLE_CHOICES
+        val current = ballIdleSeconds
+        val index = choices.indexOf(current).let { if (it < 0) 0 else it }
+        val next = choices[(index + 1) % choices.size]
+        getSharedPreferences("floating_ball", MODE_PRIVATE).edit()
+            .putInt(FloatingBallService.KEY_BALL_IDLE, next).apply()
+        // 球的闲置计时读同一份 prefs：广播一下让它按新秒数重挂计时
+        FloatingBall.refreshIdle(this)
+    }
+
+    /**
+     * 功能栏自定义顺序：存进设置，但不走整块重建（编辑还在面板里进行着）——
+     * 只让候选条里的工具栏就地换图标；面板关掉重开时自然也是新的顺序。
+     */
+    override fun setToolbarOrder(names: List<String>) {
+        writingSettings = true
+        Settings.preferences(this).edit().putString(Settings.KEY_TOOLBAR, names.joinToString(",")).apply()
+        writingSettings = false
+        panel?.bar?.reloadToolbar()
+    }
+
+    // 编辑面板的全选/复制/剪切/粘贴：全选直接 setSelection；复制/剪切/粘贴走上下文菜单动作，
+    // 目标应用自己处理（不支持的应用忽略）。
+    // 扩选的锚点与末端在面板打开时量一次（此时无选区，before 长度就是光标位，无歧义），之后纯算术跟踪。
+    private var editTextLength = 0
+    private var editCursorEnd = -1
+    private var selectionAnchor = -1
+    override var editSelecting = false
+
+    override fun selectAll() {
+        if (editTextLength <= 0 || editCursorEnd < 0) return
+        connection?.setSelection(0, editTextLength)
+        selectionAnchor = 0
+        editCursorEnd = editTextLength
+        editSelecting = true
+    }
+
+    override fun copySelection() = contextMenuAction(android.R.id.copy)
+    override fun cutSelection() = contextMenuAction(android.R.id.cut)
+    override fun paste() = contextMenuAction(android.R.id.paste)
+
+    private fun contextMenuAction(id: Int) {
+        connection?.performContextMenuAction(id)
+    }
+
+    override fun moveSelectionEnd(delta: Int) {
+        if (editCursorEnd < 0 || editTextLength <= 0) return
+        val newEnd = (editCursorEnd + delta).coerceIn(0, editTextLength)
+        if (newEnd == editCursorEnd) return
+        if (editSelecting) {
+            // 选字模式：末端带着锚点走，选区伸长/缩短
+            connection?.setSelection(minOf(selectionAnchor, newEnd), maxOf(selectionAnchor, newEnd))
+        } else {
+            // 平时：左右键就是移动光标
+            connection?.setSelection(newEnd, newEnd)
+        }
+        editCursorEnd = newEnd
+    }
+
+    override fun toggleSelectionMode() {
+        if (editSelecting) {
+            // 关：选区收拢到末端，光标落那里
+            connection?.setSelection(editCursorEnd, editCursorEnd)
+            editSelecting = false
+        } else {
+            // 开：锚点落在当前光标处；←→ 从这里开始逐字扩选
+            selectionAnchor = editCursorEnd
+            editSelecting = true
+        }
     }
 
     /** 面板开着时系统返回键先关面板。 */
@@ -422,6 +619,23 @@ class QingjianInputMethodService :
 
     override fun openPieces(text: String) {
         panel?.open(PanelKind.PIECES, text)
+    }
+
+    override fun openSolve() = toggleSolve()
+
+    /** 功能面板的「截屏搜题」：开搜题条并直接发起截屏。 */
+    override fun openSolveShot() = toggleSolve(thenShot = true)
+
+    /** 功能面板的「提取文字」：开搜题条 → 截一屏 → OCR 结果写进答案区。 */
+    override fun extractText() {
+        toggleSolve()
+        startSolveShot(forExtract = true)
+    }
+
+    /** 功能面板的「语音问答」：开搜题条 → 条里点话筒听一句 → 听到就发搜。 */
+    override fun voiceAsk() {
+        toggleSolve()
+        mainHandler.postDelayed({ (editor as? SolveBar)?.startVoice() }, 350)
     }
 
     override fun textPieces(text: String): List<String> = engine.textPieces(text)
@@ -526,10 +740,84 @@ class QingjianInputMethodService :
         showKeyboard()
     }
 
+    /**
+     * 工具栏的搜题：开 AI 搜题条（再点一下收起）。题目在搜题条里打，答案显示在搜题条下半，
+     * 不动外面的输入框。云端没配也照样开——搜题条里会提示去设置。
+     * [thenShot] 是「截屏搜题」：条支起来就发起截屏。
+     */
+    private fun toggleSolve(thenShot: Boolean = false) {
+        if (editor is SolveBar) {
+            if (thenShot) startSolveShot() else closeEditor()
+            return
+        }
+        closeEditor()
+        closePanel()
+        composer.abandon()
+        val bar = SolveBar(
+            this, Palette.of(this),
+            onAsk = solveFlow::ask,
+            onShot = { startSolveShot() },
+            onClearShot = { solveFlow.shot = null },
+            onClose = ::closeEditor,
+        )
+        bar.shot = solveFlow.shot
+        solveFlow.bar = bar
+        engine.setMetered(false)
+        editor = bar
+        panel?.showEditor(bar)
+        showKeyboard()
+        if (thenShot) startSolveShot()
+    }
+
+    /** 主线程 Handler：延后开语音问答这类"等视图建好再动"的小事。 */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * 搜题条相机键、功能面板「截屏搜题」：先记下键盘高度好裁图，再决定走哪条路——
+     * 已经授权过（投影挂在截屏服务里待命）：直接起服务截一帧，不弹授权框、键盘也不收；
+     * 第一次：让透明授权页代弹系统的录屏授权（输入法自己弹不了），授权那会儿键盘会收、
+     * 搜题条也收，截完由 startSolveShot 挂的回调把条重新支起来。
+     */
+    private fun startSolveShot(forExtract: Boolean = false) {
+        SolveShot.imeHeight = if (SolveCaptureService.ready) panel?.view?.height ?: 0 else 0
+        SolveShot.onResult = { bitmap ->
+            if (editor !is SolveBar) toggleSolve()
+            val bar = editor as? SolveBar
+            if (forExtract) {
+                // 提取文字：不进搜题会话，直接把 OCR 结果写进答案区
+                bar?.showExtracting()
+                ExtractText.from(this, bitmap) { text, error ->
+                    when {
+                        error != null -> bar?.fail("提取失败：${error.take(50)}")
+                        text.isNullOrBlank() -> bar?.fail("没有识别到文字")
+                        else -> bar?.showExtracted(text)
+                    }
+                }
+            } else {
+                solveFlow.shot = bitmap
+                bar?.shot = bitmap
+            }
+            requestShowSelf(0)
+        }
+        if (SolveCaptureService.ready) {
+            startForegroundService(Intent(this, SolveCaptureService::class.java))
+        } else {
+            startActivity(
+                Intent(this, SolveCaptureActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
     private fun closeEditor() {
         if (editor == null) return
         // 快捷翻译收起（确定、再点图标、换输入框）都把已有的译文落定；取消在这之前已经撤掉了
         if (editor is TranslateBar) quickTranslate.finish()
+        // 搜题条收起时作废在飞的请求、清掉待搜的截图，状态不留（重开是新的一条）
+        if (editor is SolveBar) {
+            solveFlow.stop()
+            solveFlow.shot = null
+        }
         composer.abandon()
         // 编辑条里打的字不进应用，不算「打了多少字」；收起后照常记
         engine.setMetered(true)

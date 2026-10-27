@@ -18,6 +18,14 @@ data class Settings(
     val bottomRight: BottomAction,
     val haptic: Boolean,
     val keyPopup: Boolean,
+    /** 隐私模式：给键盘窗口挂 FLAG_SECURE，录屏与截屏里键盘整块变黑（缺省关）。 */
+    val privacy: Boolean,
+    /** 答题模式：搜题条开着时键盘浮在页面上，App 不缩不滚（缺省关）。 */
+    val solveOverlay: Boolean,
+    /** 悬浮球：任意界面的青简小球，点开搜题 / 截屏搜题（缺省关；见 solve/FloatingBallService.kt）。 */
+    val floatingBall: Boolean,
+    /** 悬浮球的不透明度百分比（40–100，缺省 100；功能面板里点「球透明度」循环调）。 */
+    val ballOpacity: Int,
     /** 候选出繁体（字形按 [InputOptions.traditionalVariant]）。 */
     val traditional: Boolean,
     /** 上次用的语言与中英键的另一边（[app.qingjian.inputmethod.service.input.Language] 的名字），没记过为 null。 */
@@ -67,6 +75,16 @@ data class Settings(
         const val KEY_BOTTOM_RIGHT = "bottom_right"
         const val KEY_HAPTIC = "haptic"
         const val KEY_POPUP = "key_popup"
+        const val KEY_PRIVACY = "privacy"
+        const val KEY_SOLVE_OVERLAY = "solve_overlay"
+        const val KEY_FLOATING_BALL = "floating_ball"
+        const val KEY_BALL_OPACITY = "ball_opacity"
+
+        /** 球透明度下限：滑杆范围 1–100，这里兜底防 0（全透明就找不着球了）。 */
+        const val BALL_OPACITY_MIN = 1
+
+        /** 功能栏（键盘工具栏）的自定义图标顺序，逗号分隔的动作名；见 candidates/Toolbar.kt 的解析。 */
+        const val KEY_TOOLBAR = "toolbar_actions"
         const val KEY_TRADITIONAL = "traditional"
         const val KEY_LANGUAGE = "language"
         const val KEY_PARTNER = "language_partner"
@@ -127,6 +145,10 @@ data class Settings(
                 bottomRight = BottomAction.of(prefs.getString(KEY_BOTTOM_RIGHT, null), BottomAction.VOICE),
                 haptic = prefs.getBoolean(KEY_HAPTIC, true),
                 keyPopup = prefs.getBoolean(KEY_POPUP, true),
+                privacy = prefs.getBoolean(KEY_PRIVACY, false),
+                solveOverlay = prefs.getBoolean(KEY_SOLVE_OVERLAY, false),
+                floatingBall = prefs.getBoolean(KEY_FLOATING_BALL, false),
+                ballOpacity = prefs.getInt(KEY_BALL_OPACITY, 100).coerceIn(BALL_OPACITY_MIN, 100),
                 traditional = prefs.getBoolean(KEY_TRADITIONAL, false),
                 language = prefs.getString(KEY_LANGUAGE, null),
                 partner = prefs.getString(KEY_PARTNER, null),

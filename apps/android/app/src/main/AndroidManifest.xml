@@ -10,6 +10,14 @@
     <!-- 云联想「只在 Wi-Fi 下使用」要看当前网络（见 cloud/Network.kt） -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- AI 搜题的截屏（见 solve/SolveCapture.kt）：MediaProjection 录屏授权 + Android 9 起要求的 mediaProjection 前台服务 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <!-- 悬浮球（见 solve/FloatingBallService.kt）：盖在别的应用上面要悬浮窗权限；常驻的前台服务用 specialUse 类型 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- 语音输入录音（见 voice/EngineRecognizer.kt）；用到时由 voice/MicrophonePermissionActivity.kt 弹框申请 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -46,6 +54,9 @@
         <activity android:name=".settings.page.AdvancedActivity" android:exported="false" />
         <activity android:name=".settings.page.VoiceSettingsActivity" android:exported="false" />
 
+        <!-- 搜题历史：键盘侧搜到答案写入 solve/SolveHistory.kt，这里只读 -->
+        <activity android:name=".solve.SolveHistoryActivity" android:exported="false" />
+
         <!-- 系统文字选择菜单里的「青简翻译」，见 translate/ProcessTextActivity.kt -->
         <activity
             android:name=".translate.ProcessTextActivity"
@@ -67,6 +78,30 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@style/Theme.Qingjian.Transparent" />
+
+        <!-- AI 搜题的截屏授权页：透明，只弹系统的录屏授权框并把结果交给前台服务，见 solve/SolveCapture.kt -->
+        <activity
+            android:name=".solve.SolveCaptureActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Qingjian.Transparent" />
+
+        <!-- 截屏那一瞬要挂着 mediaProjection 类型的前台服务，见 solve/SolveCapture.kt -->
+        <service
+            android:name=".solve.SolveCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 悬浮球的前台服务：球、菜单与悬浮搜题页三个悬浮窗都挂在它下面，见 solve/FloatingBallService.kt -->
+        <service
+            android:name=".solve.FloatingBallService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating ball overlay for AI solve" />
+        </service>
 
         <!-- 剪贴板图片交给别的应用读（发图片、放回系统剪贴板），见 clipboard/ClipboardImageProvider.kt -->
         <provider

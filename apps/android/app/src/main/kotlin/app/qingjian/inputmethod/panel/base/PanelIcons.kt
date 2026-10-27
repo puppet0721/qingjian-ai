@@ -7,7 +7,7 @@ import android.graphics.RectF
 
 /** 工具栏、面板与 App 页面的线条图标，画在 24×24 的格子里再按尺寸缩放；与 [app.qingjian.inputmethod.keyboard.paint.KeyIcons] 同一种画法。 */
 object PanelIcons {
-    enum class Icon { BACK, CHEVRON, EXPAND, COLLAPSE, HIDE, EMOJI, KEYBOARD, SYMBOLS, RESIZE, MIC, CLIPBOARD, TRANSLATE, CLEAR, PLUS, TRASH, PEN, TOP, SPLIT, COPY, SETTINGS, GLOBE, LOCK, UNLOCK, CHECK, INFO, HOME, BOOK, USER, CHART, CLOUD, PALETTE }
+    enum class Icon { BACK, CHEVRON, EXPAND, COLLAPSE, HIDE, EMOJI, KEYBOARD, SYMBOLS, RESIZE, MIC, CLIPBOARD, TRANSLATE, CLEAR, PLUS, TRASH, PEN, TOP, SPLIT, COPY, SETTINGS, GLOBE, LOCK, UNLOCK, CHECK, INFO, HOME, BOOK, USER, CHART, CLOUD, PALETTE, SEARCH, CAMERA, SELECT_ALL, CUT, ARROW_LEFT, ARROW_RIGHT, BALL }
 
     private val path = Path()
     private val oval = RectF()
@@ -46,6 +46,13 @@ object PanelIcons {
             Icon.CHART -> chart()
             Icon.CLOUD -> cloud()
             Icon.PALETTE -> palette()
+            Icon.SEARCH -> search()
+            Icon.CAMERA -> camera()
+            Icon.SELECT_ALL -> selectAll()
+            Icon.CUT -> cut()
+            Icon.ARROW_LEFT -> arrow(left = true)
+            Icon.ARROW_RIGHT -> arrow(left = false)
+            Icon.BALL -> { circle(12f, 12f, 8.5f); circle(12f, 12f, 3f) }
         }
         val scale = size / 24f
         canvas.save()
@@ -232,6 +239,49 @@ object PanelIcons {
         circle(12f, 12f, 9f)
         polyline(12f, 11f, 12f, 16.5f)
         circle(12f, 7.8f, 0.3f)
+    }
+
+    /** 放大镜：镜片斜着带一圈，柄往右下。 */
+    private fun search() {
+        circle(10.5f, 10.5f, 6f)
+        polyline(15f, 15f, 20f, 20f)
+    }
+
+    /** 相机：机身圆角矩形、顶上取景凸起、中间镜头圈。 */
+    private fun camera() {
+        oval.set(3f, 7f, 21f, 19.5f)
+        path.addRoundRect(oval, 2.5f, 2.5f, Path.Direction.CW)
+        polyline(9f, 7f, 10.5f, 4.5f, 13.5f, 4.5f, 15f, 7f)
+        circle(12f, 13f, 4f)
+    }
+
+    /** 全选：四角括号框住一片区域，里面两行示意文字。 */
+    private fun selectAll() {
+        polyline(3f, 8f, 3f, 4f, 8f, 4f)
+        polyline(16f, 4f, 21f, 4f, 21f, 8f)
+        polyline(21f, 16f, 21f, 20f, 16f, 20f)
+        polyline(8f, 20f, 3f, 20f, 3f, 16f)
+        polyline(7f, 10.5f, 17f, 10.5f)
+        polyline(7f, 14.5f, 14f, 14.5f)
+    }
+
+    /** 剪切：剪刀——两道交叉的刃，末端两个指环。 */
+    private fun cut() {
+        circle(8f, 17f, 2.6f)
+        circle(16f, 17f, 2.6f)
+        polyline(9.6f, 15.4f, 17f, 5f)
+        polyline(14.4f, 15.4f, 7f, 5f)
+    }
+
+    /** 扩选箭头：杆加尖，[left] 朝左。 */
+    private fun arrow(left: Boolean) {
+        if (left) {
+            polyline(20f, 12f, 7f, 12f)
+            polyline(13f, 5f, 6f, 12f, 13f, 19f)
+        } else {
+            polyline(4f, 12f, 17f, 12f)
+            polyline(11f, 5f, 18f, 12f, 11f, 19f)
+        }
     }
 
     private fun lock(open: Boolean) {

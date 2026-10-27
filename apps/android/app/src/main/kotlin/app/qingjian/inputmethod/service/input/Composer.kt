@@ -294,6 +294,16 @@ class Composer(private val engine: Engine, private val host: Host) {
         commit(text)
     }
 
+    /**
+     * 候选条尾部的 emoji 芯片：**替换**正在组句的那一串，直接上屏这个 emoji。
+     * 与 [commitPanelText] 的区别是不先顶首选——用户要的是这个 emoji，不是打了一半的词
+     * （Gboard 同款行为）。
+     */
+    fun commitEmoji(emoji: String) {
+        if (composing) abandon()
+        commit(emoji)
+    }
+
     /** 开始说话前：组句落下（同回车），识别出的字接在后面。 */
     fun prepareVoice() {
         if (composing) settle()

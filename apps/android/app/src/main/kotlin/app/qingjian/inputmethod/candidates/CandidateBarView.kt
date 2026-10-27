@@ -24,7 +24,7 @@ class CandidateBarView(
     context: Context,
     private val palette: Palette,
     /** 候选字号档的倍数：调大时条跟着高，候选不被截。 */
-    textScale: Float,
+    private val textScale: Float,
     private val source: StripSource,
     private val listener: Listener,
 ) : View(context) {
@@ -45,12 +45,15 @@ class CandidateBarView(
 
         /** 点了候选右端的 ⌄：展开全部候选（[CandidateGrid]）。 */
         fun onExpand()
+
+        /** 点了候选条尾部的 emoji 芯片：清掉组句、直接上屏这个 emoji。 */
+        fun onEmoji(emoji: String)
     }
 
     private val density = resources.displayMetrics.density
     val barHeight = 62f * density * maxOf(1f, textScale)
     private val strip = CandidateStrip(density, barHeight, textScale)
-    private val toolbar = Toolbar(context, palette, density, barHeight)
+    private var toolbar = Toolbar(context, palette, density, barHeight)
     private val resizeHandle = ResizeHandle(
         palette, density, barHeight,
         onDrag = listener::onResizeDrag,
@@ -75,13 +78,41 @@ class CandidateBarView(
     private val expandFill = Paint()
     private val expandIcon = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.text }
 
+    // —— emoji 联想：首选词命中映射表时，⌄ 左边画最多两枚圆角芯片 ——
+    /** 每枚芯片的宽（emoji 一行大、四周留白）。 */
+    private val emojiSlot = 42f * density
+
+    /** 当前该联想的 emoji；空就是没有。 */
+    private var emojiSuggestions: List<String> = emptyList()
+
+    private val emojiText = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).also {
+        it.textSize = 21f * density * maxOf(1f, textScale)
+        it.textAlign = Paint.Align.CENTER
+    }
+    private val emojiChip = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val emojiChipRect = android.graphics.RectF()
+
     private val expandable: Boolean get() = strip.candidates.isNotEmpty()
 
     /** 显示的是工具栏：横滑滑的是它中间那排图标，不是整条。 */
     private val toolbarShown: Boolean get() = !resizing && strip.isEmpty
 
-    /** 候选能用的宽度：有 ⌄ 时让出那一格。 */
-    private val stripWidth: Int get() = if (expandable) width - expandSlot.toInt() else width
+    /** emoji 芯片占的宽（有联想时才有）。 */
+    private val emojiAreaWidth: Float get() = emojiSuggestions.size * emojiSlot
+
+    /**
+     * 交给渲染器的宽度：**不含** emoji 芯片区。
+     *
+     * 芯片是壳自己画的，不该让 Rust 按更窄的宽度重排——那样候选会被挤在一起
+     * （实测：打 xiao 时「小」只剩半截，后面还冒出两个菱形截断标记）。
+     * 所以渲染按这个宽度，绘制时再用 [visibleStripWidth] 裁掉被芯片盖住的那截。
+     */
+    private val renderStripWidth: Int
+        get() = if (expandable) (width - expandSlot).toInt().coerceAtLeast(0) else width
+
+    /** 绘制时候选区真正可见的宽度：芯片贴上来时让出芯片那一块。 */
+    private val visibleStripWidth: Int
+        get() = if (expandable) (width - expandSlot - emojiAreaWidth).toInt().coerceAtLeast(0) else width
 
     /** 气泡对着的候选下标；气泡开着时高亮跟到它上面。 */
     private var popupIndex = -1
@@ -134,11 +165,35 @@ class CandidateBarView(
 
     /** 拼音行右侧的提示（删候选的结果）由渲染器从 Rust 那边的帧里取，这里只要拼音和候选。 */
     fun show(preedit: String, candidates: List<Candidate>) {
+        // 内容一字没变就不重画：renderStrip 要走两次 JNI + 位图拷贝，白花的主线程时间
+        val same = preedit == shownPreedit && candidates == shownCandidates
+        if (same) return
+        shownPreedit = preedit
+        shownCandidates = candidates
         closePopup()
         strip.show(preedit, candidates)
+        emojiSuggestions = suggestEmoji(candidates)
         scroller.forceFinished(true)
         scrollTo(0, 0)
         repaint()
+    }
+
+    /** 上一帧画过的内容，用来跳过重复的 show()。 */
+    private var shownPreedit: String? = null
+    private var shownCandidates: List<Candidate> = emptyList()
+
+    /**
+     * 只在**中文组句、首选词命中映射表**时联想：
+     * 拼音行是空的（补全、英文直输）不联想；首选词不在表里不联想。
+     * 英文组句 V1 不触发——英文的词条是英文单词，映射表全是中文词，天然不命中；
+     * 再加一道判断，拼音里带字母的组合（英文直输）直接跳过。
+     */
+    private fun suggestEmoji(candidates: List<Candidate>): List<String> {
+        if (candidates.isEmpty()) return emptyList()
+        val top = candidates.first()
+        // 首选已经是 emoji（渲染器画不出的那种）时不再联想，免得叠在一起
+        if (top.text.isEmpty()) return emptyList()
+        return EmojiMap.forWord(top.text)
     }
 
     /** 进入拖动调高度（功能面板里点「键盘高度」）。 */
@@ -148,7 +203,7 @@ class CandidateBarView(
 
     /** 按当前高亮重画位图：新的一帧到了、或长按气泡换了对着的候选。 */
     private fun repaint() {
-        strip.paint(if (strip.isEmpty) null else source.render(popupIndex.coerceAtLeast(0), palette.dark, stripWidth))
+        strip.paint(if (strip.isEmpty) null else source.render(popupIndex.coerceAtLeast(0), palette.dark, renderStripWidth))
         invalidate()
     }
 
@@ -167,10 +222,29 @@ class CandidateBarView(
         resizing -> resizeHandle.draw(canvas, width)
         strip.isEmpty -> toolbar.draw(canvas, width)
         else -> {
-            strip.draw(canvas, scrollX, stripWidth)
+            strip.draw(canvas, scrollX, visibleStripWidth)
+            // 顺序：候选 → emoji 芯片 → ⌄；芯片贴在 ⌄ 左边
+            if (emojiSuggestions.isNotEmpty()) drawEmojiChips(canvas)
             if (expandable) drawExpand(canvas)
             // 候选条与键盘之间一道细线，分出层次；滚动时线不跟着走
             canvas.drawRect(scrollX.toFloat(), height - divider.strokeWidth, scrollX + width.toFloat(), height.toFloat(), divider)
+        }
+    }
+
+    /** emoji 芯片：圆角小方块，贴在 ⌄ 左边，一排放得下几张就几张。 */
+    private fun drawEmojiChips(canvas: Canvas) {
+        val cy = (strip.candidatesTop + height) / 2f
+        val startX = scrollX + visibleStripWidth.toFloat()
+        val chipSize = emojiSlot - 6f * density
+        emojiChip.color = strip.background
+        emojiSuggestions.forEachIndexed { i, emoji ->
+            val left = startX + i * emojiSlot + 3f * density
+            emojiChipRect.set(left, cy - chipSize / 2, left + chipSize, cy + chipSize / 2)
+            // 芯片底：比候选条底色亮一点，看得出是一块可点的东西
+            emojiChip.color = palette.functionalKey
+            canvas.drawRoundRect(emojiChipRect, chipSize / 3f, chipSize / 3f, emojiChip)
+            val baseline = cy - (emojiText.ascent() + emojiText.descent()) / 2
+            canvas.drawText(emoji, emojiChipRect.centerX(), baseline, emojiText)
         }
     }
 
@@ -183,7 +257,7 @@ class CandidateBarView(
 
     /** 钉在右端的 ⌄：与候选行同一高度居中，左边一道短竖线隔开。 */
     private fun drawExpand(canvas: Canvas) {
-        val left = scrollX + stripWidth.toFloat()
+        val left = scrollX + visibleStripWidth.toFloat()
         expandFill.color = strip.background
         canvas.drawRect(left, 0f, scrollX + width.toFloat(), height.toFloat(), expandFill)
         val cy = (strip.candidatesTop + height) / 2f
@@ -192,7 +266,13 @@ class CandidateBarView(
     }
 
     private fun tap(x: Float) {
-        if (expandable && x >= stripWidth) {
+        if (expandable && x >= visibleStripWidth) {
+            // ⌄ 左边是 emoji 芯片区：点中哪枚就上屏哪个 emoji（替换组句，Gboard 同款）
+            val chipIndex = ((x - visibleStripWidth) / emojiSlot).toInt()
+            if (chipIndex in emojiSuggestions.indices) {
+                listener.onEmoji(emojiSuggestions[chipIndex])
+                return
+            }
             listener.onExpand()
             return
         }
@@ -200,10 +280,17 @@ class CandidateBarView(
             strip.indexAt(x + scrollX).takeIf { it >= 0 }?.let(listener::onSelect)
             return
         }
-        when (val action = toolbar.actionAt(x, width)) {
+        val action = toolbar.actionAt(x, width) ?: return
+        when (action) {
             Toolbar.Action.RESIZE -> resizing = true
             else -> listener.onToolbar(action)
         }
+    }
+
+    /** 功能栏的自定义顺序存好了：就地换一套图标，不整块重建。 */
+    fun reloadToolbar() {
+        toolbar.reload(context)
+        invalidate()
     }
 
     /**
@@ -211,7 +298,7 @@ class CandidateBarView(
      * 对应桌面端修饰键 + 数字。没有译文也删不了的候选不弹。
      */
     private fun openTranslations(event: MotionEvent) {
-        if (event.x >= stripWidth) return
+        if (event.x >= visibleStripWidth) return
         val index = strip.indexAt(event.x + scrollX)
         val candidate = strip.candidates.getOrNull(index) ?: return
         val senses = candidate.senses
@@ -262,5 +349,5 @@ class CandidateBarView(
         closePopup()
     }
 
-    private fun maxScroll(): Int = (strip.contentWidth - stripWidth).toInt().coerceAtLeast(0)
+    private fun maxScroll(): Int = (strip.contentWidth - visibleStripWidth).toInt().coerceAtLeast(0)
 }

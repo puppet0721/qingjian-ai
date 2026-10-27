@@ -218,8 +218,13 @@ class Engine(context: Context, private val onReady: () -> Unit) {
             ?: ByteBuffer.allocateDirect(bytes).also { stripBuffer = it }
         if (!Native.copyStrip(handle, buffer)) return null
         buffer.position(0).limit(bytes)
+        // 位图复用：尺寸没变就不 reconfigure（那会走一遍 native 重分配）
         val bitmap = stripBitmap?.takeIf { it.allocationByteCount >= bytes }
-            ?.apply { if (this.width != width || this.height != height) reconfigure(width, height, Bitmap.Config.ARGB_8888) }
+            ?.apply {
+                if (this.width != width || this.height != height) {
+                    reconfigure(width, height, Bitmap.Config.ARGB_8888)
+                }
+            }
             ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { stripBitmap = it }
         bitmap.copyPixelsFromBuffer(buffer)
         buffer.clear()
@@ -309,6 +314,64 @@ class Engine(context: Context, private val onReady: () -> Unit) {
             return List(array.length()) { i ->
                 array.getJSONObject(i).let { it.getString("name") to File(it.getString("path")) }
             }
+        }
+
+        /** 导入结果：写进去几个文件、跳过几个（不是学习数据的条目）、出错信息（null 是没出错）。 */
+        class ImportResult(val written: Int, val skipped: Int, val failed: Int, val error: String? = null)
+
+        /**
+         * 从备份 zip **覆盖**导入学习数据。返回 [ImportResult]。
+         *
+         * 流程同 [clearLearning]：先卸下开着的引擎（不然它内存里的旧学习数据下次落盘会把导入的盖回去），
+         * 再把 zip 里那些学习数据文件写进 user 目录，最后重新装配。
+         *
+         * **收哪些文件**：只收 zip 根上的 `.tsv` / `.json`（导出就是这么平铺的），且名字不能带路径——
+         * 防恶意 zip 用 `../` 写到 user 目录外面。剪贴板历史（`clipboard.jsonl`）不收：那是刻意不导出的。
+         * 收不收得下不看"当前有哪些文件"——新装的机器 user 目录可能是空的，那也得能导入。
+         *
+         * **覆盖语义**：zip 里有的文件直接盖掉；zip 里没有的文件保留原样。
+         * 写入用「先写 `.importing` 临时文件再改名」，中途失败不会把原来的好数据弄坏。
+         */
+        fun importLearning(context: Context, zipBytes: ByteArray): ImportResult {
+            val dir = userDir(context)
+            var written = 0
+            var skipped = 0
+            var failed = 0
+            var error: String? = null
+            live.forEach(Engine::unload)
+            try {
+                java.util.zip.ZipInputStream(zipBytes.inputStream()).use { zip ->
+                    while (true) {
+                        val entry = zip.nextEntry ?: break
+                        val name = entry.name
+                        val base = File(name).name
+                        val accepted = !entry.isDirectory &&
+                            name == base &&
+                            base.isNotEmpty() &&
+                            (base.endsWith(".tsv") || base.endsWith(".json"))
+                        if (!accepted) {
+                            skipped++
+                            zip.closeEntry()
+                            continue
+                        }
+                        runCatching {
+                            val target = File(dir, base)
+                            val temp = File(dir, "$base.importing")
+                            temp.outputStream().use { out -> zip.copyTo(out) }
+                            if (!temp.renameTo(target)) {
+                                target.delete()
+                                if (!temp.renameTo(target)) error("改名失败：$base")
+                            }
+                        }.onSuccess { written++ }.onFailure { failed++ }
+                        zip.closeEntry()
+                    }
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+            } finally {
+                live.forEach(Engine::load)
+            }
+            return ImportResult(written, skipped, failed, error)
         }
     }
 }

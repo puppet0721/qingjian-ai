@@ -32,6 +32,9 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // 本机没有 Rust 工具链：用 prebuilt/jniLibs 里预编译的 so（来自官方 0.3.1 APK），跳过 cargoNdk
+    if (hasPrebuiltSo) sourceSets["main"].jniLibs.srcDir(rootDir.resolve("app/prebuilt/jniLibs"))
+
     if (releaseKeystore != null) {
         signingConfigs {
             create("release") {
@@ -56,7 +59,8 @@ android {
     }
 
     sourceSets["main"].apply {
-        jniLibs.srcDir(nativeLibs)
+        // 预编译 so：prebuilt 目录优先；cargoNdk 的产物目录已经在上面加过，这里源码编译路径不变
+        if (!hasPrebuiltSo) jniLibs.srcDir(nativeLibs)
         assets.srcDir(bundledAssets)
     }
 }
@@ -102,7 +106,8 @@ val stageData by tasks.registering(Sync::class) {
     } else {
         from(repoRoot.resolve("assets/sample")) { include("dict.tsv", "glossary-en.tsv", "english.tsv") }
     }
-    from(repoRoot.resolve("assets/emoji")) { include("emoji-zh.tsv", "emoji-en.tsv") }
+    // emoji-map.json 是候选条尾部的联想表（中文首选词 -> 最多 2 个 emoji），壳在 Kotlin 侧用
+    from(repoRoot.resolve("assets/emoji")) { include("emoji-zh.tsv", "emoji-en.tsv", "emoji-map.json") }
     // 词汇等级表（英语 CEFR、日语 JLPT），生词本按级筛与统计页按级分用
     from(repoRoot.resolve("assets/levels")) { include("levels-*.tsv") }
     // 五笔码表（形码方案用，与 PC 随包的同一份），解出来仍叫 wubi86.tsv
@@ -112,6 +117,12 @@ val stageData by tasks.registering(Sync::class) {
     }
 }
 
+// 本机没有 Rust 工具链时：复用预编译的 libqingjian_android.so（官方 APK 提取，放 app/prebuilt/jniLibs/），
+// 跳过 cargoNdk。装了 cargo-ndk 且有 aarch64 目标时删掉 prebuilt 目录即可回到源码编译。
+val prebuiltJniLibs = rootDir.resolve("app/prebuilt/jniLibs")
+val hasPrebuiltSo = prebuiltJniLibs.resolve("arm64-v8a/libqingjian_android.so").isFile
+
 tasks.named("preBuild") {
-    dependsOn(cargoNdk, stageData)
+    if (!hasPrebuiltSo) dependsOn(cargoNdk)
+    dependsOn(stageData)
 }

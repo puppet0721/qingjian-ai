@@ -106,7 +106,12 @@ class KeyboardSettingsActivity : PageActivity() {
                 R.string.learning_language_title, SettingChoices.learningLanguageName(current),
                 languages.map { it.label }, languages.indexOfFirst { it.key == current },
             ) {
-                prefs.edit().putString(Settings.KEY_LEARNING_LANGUAGE, languages[it].key).apply()
+                val language = languages[it].key
+                prefs.edit().putString(Settings.KEY_LEARNING_LANGUAGE, language).apply()
+                // 释义表是按需解压的：换了学习语言就把这张表解出来（后台线程，别卡住设置页）
+                Thread {
+                    app.qingjian.inputmethod.core.BundledData.ensureGlossary(applicationContext, language)
+                }.start()
                 rebuild()
             },
             ui.note(R.string.learning_language_note),

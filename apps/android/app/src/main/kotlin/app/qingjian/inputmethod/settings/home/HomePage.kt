@@ -18,6 +18,8 @@ import app.qingjian.inputmethod.settings.page.KeyboardSettingsActivity
 import app.qingjian.inputmethod.settings.page.StatsActivity
 import app.qingjian.inputmethod.settings.widget.BarChart
 import app.qingjian.inputmethod.settings.widget.SettingsWidgets
+import app.qingjian.inputmethod.solve.FloatingBall
+import app.qingjian.inputmethod.solve.SolveHistoryActivity
 import app.qingjian.inputmethod.theme.AppColors
 
 /**
@@ -183,9 +185,13 @@ class HomePage(
             orientation = LinearLayout.HORIZONTAL
             setPadding(ui.dp(4), ui.dp(2), ui.dp(4), ui.dp(2))
             listOf(
+                ui.gridItem(Icon.SEARCH, AppColors.CYAN, R.string.page_solve_history) { open(SolveHistoryActivity::class.java) },
                 ui.gridItem(Icon.KEYBOARD, AppColors.JADE, R.string.page_keyboard) { open(KeyboardSettingsActivity::class.java) },
                 ui.gridItem(Icon.BOOK, AppColors.ORANGE, R.string.tab_vocabulary) { openTab(MainActivity.TAB_VOCABULARY) },
                 ui.gridItem(Icon.GLOBE, AppColors.BLUE, R.string.shortcut_switch) { ImeState.showPicker(activity) },
+                ui.gridItem(Icon.BALL, AppColors.PINK, R.string.tile_floating_ball) {
+                    FloatingBall.setEnabled(activity, !FloatingBall.enabled(activity))
+                },
                 ui.gridItem(Icon.INFO, AppColors.PURPLE, R.string.page_about) { open(AboutActivity::class.java) },
             ).forEach { addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
         },

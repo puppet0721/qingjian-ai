@@ -7,3 +7,6 @@
 /data
 .playwright-mcp/
 __pycache__/
+
+# 构建产物：本地预编译的 Rust so，不进仓库
+apps/android/app/prebuilt/

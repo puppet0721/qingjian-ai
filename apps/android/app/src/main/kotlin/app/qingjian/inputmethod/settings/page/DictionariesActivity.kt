@@ -11,6 +11,7 @@ import app.qingjian.inputmethod.R
 import app.qingjian.inputmethod.core.BundledData
 import app.qingjian.inputmethod.core.InputOptions
 import app.qingjian.inputmethod.core.Native
+import app.qingjian.inputmethod.hotwords.HotWords
 import app.qingjian.inputmethod.settings.Settings
 import java.io.File
 import kotlin.concurrent.thread
@@ -44,8 +45,78 @@ class DictionariesActivity : PageActivity() {
             domainsCard(options),
             spaced(ui.sectionTitle(R.string.section_imported), 20),
             importedCard(options),
+            spaced(ui.sectionTitle(R.string.section_hot_words), 20),
+            hotWordsCard(),
         )
     }
+
+    /**
+     * 网络热词：定期从 SogouPopularDict 拉搜狗网络流行新词，导入成本地词库。
+     * 数据本身就是 Rime `.dict.yaml`，青简的词库导入能直接吃，所以这里只管下载与触发。
+     */
+    private fun hotWordsCard(): View {
+        val rows = mutableListOf<View>()
+        val enabled = HotWords.isEnabled(this)
+        rows += ui.toggle(
+            getString(R.string.hot_words_title),
+            getString(R.string.hot_words_note),
+            enabled,
+            null,
+        ) { on ->
+            HotWords.setEnabled(this, on)
+            // 刚打开就顺手更新一次，别让用户等一个周期
+            if (on) refreshHotWords(force = true) else rebuild()
+        }
+        if (enabled) {
+            rows += ui.divider()
+            rows += ui.action(R.string.hot_words_interval, getString(R.string.hot_words_days, HotWords.intervalDays(this))) {
+                // 点一下循环换档：3 → 7 → 30 → 3
+                val choices = HotWords.INTERVAL_CHOICES
+                val current = choices.indexOf(HotWords.intervalDays(this)).let { if (it < 0) 0 else it }
+                HotWords.setIntervalDays(this, choices[(current + 1) % choices.size])
+                rebuild()
+            }
+            rows += ui.divider()
+            val status = if (hotWordsUpdating) {
+                getString(R.string.hot_words_updating)
+            } else {
+                hotWordsStatus()
+            }
+            rows += ui.action(R.string.hot_words_update_now, status, if (hotWordsUpdating) ui.colors.secondary else ui.colors.brand) {
+                if (!hotWordsUpdating) refreshHotWords(force = true)
+            }
+        }
+        rows += ui.note(R.string.hot_words_source)
+        return ui.card(*rows.toTypedArray())
+    }
+
+    /** 上次更新的状态：没更新过 / 上次是什么时候、多少条。 */
+    private fun hotWordsStatus(): String {
+        val last = HotWords.lastUpdate(this)
+        if (last == 0L) return getString(R.string.hot_words_never)
+        val whenText = android.text.format.DateFormat.format("MM-dd HH:mm", last).toString()
+        val count = HotWords.wordCount(this)
+        return if (count > 0) "$whenText · ${getString(R.string.hot_words_entries, count)}" else whenText
+    }
+
+    /** 后台更新热词库；完了刷新页面。 */
+    private fun refreshHotWords(force: Boolean) {
+        if (hotWordsUpdating) return
+        hotWordsUpdating = true
+        rebuild()
+        thread {
+            val message = runCatching { HotWords.update(applicationContext, force) }
+                .getOrElse { it.message ?: "更新失败" }
+            runOnUiThread {
+                hotWordsUpdating = false
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                rebuild()
+            }
+        }
+    }
+
+    /** 热词库正在下载/导入。 */
+    private var hotWordsUpdating = false
 
     private fun domainsCard(options: InputOptions): View {
         val rows = mutableListOf<View>()

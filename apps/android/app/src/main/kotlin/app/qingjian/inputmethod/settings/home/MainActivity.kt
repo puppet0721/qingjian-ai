@@ -32,6 +32,8 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         ui = SettingsWidgets(this, AppColors.of(this))
         pages = listOf(HomePage(this, ui, ::select), VocabularyPage(this, ui), MePage(this, ui))
+        // 热词库到期就静默更新一次（开着才动，自己在后台跑，不打扰用户）
+        app.qingjian.inputmethod.hotwords.HotWords.autoUpdateIfDue(this)
         tab = savedInstanceState?.getInt(KEY_TAB) ?: TAB_HOME
         host = FrameLayout(this)
         tabBar = TabBar(
