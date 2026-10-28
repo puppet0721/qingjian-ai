@@ -281,6 +281,9 @@ class FloatingBallService : Service() {
     private var askingBuf: StringBuilder? = null
     private var askingTab = TAB_ASK
 
+    /** 各标签上一次搜题收完的耗时（毫秒）；没有或失败为 null。标题栏上显示。 */
+    private val answerElapsed = arrayOfNulls<Long>(4)
+
     /**
      * 每个标签各存一份**输入框文字**：搜题 / 截屏 / 语音互不串。
      *
@@ -294,8 +297,11 @@ class FloatingBallService : Service() {
 
     /** 截屏授权/取帧卡住时的兜底：10 秒没动静把页面放回来（或把球请回来）。 */
     private val captureFailsafe = Runnable {
-        // 页面只是被藏起来等截图：超时了也得放回来，别让它一直不可见
-        if (pageHiddenForCapture) restorePageAfterCapture()
+        // 页面只是被藏起来等截图：超时了也得放回来，并且说清楚为什么没截到
+        if (pageHiddenForCapture) {
+            restorePageAfterCapture()
+            Toast.makeText(this, "截屏超时了，没抓到画面，再试一次", Toast.LENGTH_SHORT).show()
+        }
         if (FloatingBall.enabled(this) && !pageShown && !ballShown) showBall()
     }
 
@@ -549,81 +555,6 @@ class FloatingBallService : Service() {
     private var holdOverlay: VoiceHoldOverlay? = null
     private var holdButtonView: HoldTalkButton? = null
 
-    /**
-     * 「按住说」按钮：自绘，自己处理 DOWN/MOVE/UP。
-     * 用自绘 View 而不是 TextView + setOnTouchListener——后者在某些父容器里会被点击判定吃掉。
-     */
-    private inner class HoldTalkButton(context: Context, private val colors: AppColors) : View(context) {
-        var onPress: () -> Unit = {}
-        var onMove: (Float) -> Unit = {}
-        var onRelease: (Boolean) -> Unit = {}
-
-        private val ink = Ink(Palette.of(context), resources.displayMetrics.density)
-        private val bg = android.graphics.RectF()
-        private var downRawY = 0f
-        private var downRawX = 0f
-        private var moved = false
-
-        /** 按下时按钮文字变「松手搜索」：由外面的 holdButtonViewLabel 控制。 */
-        var label: String = "按住说"
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val w = (ink.measure("松手搜索", 14f, bold = true) + ink.dp(28f)).toInt()
-            val h = ink.dp(38f).toInt()
-            setMeasuredDimension(w, h)
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            bg.set(0f, 0f, width.toFloat(), height.toFloat())
-            ink.round(canvas, bg, 12f, colors.brand)
-            ink.text(canvas, label, 14f, colors.onBrand, width / 2f, height / 2f, bold = true)
-        }
-
-        @SuppressLint("ClickableViewAccessibility")
-        override fun onTouchEvent(event: MotionEvent): Boolean {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downRawY = event.rawY
-                    downRawX = event.rawX
-                    moved = false
-                    label = "松手搜索"
-                    invalidate()
-                    onPress()
-                    return true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!moved && (kotlin.math.abs(event.rawY - downRawY) > 6f || kotlin.math.abs(event.rawX - downRawX) > 6f)) {
-                        moved = true
-                    }
-                    if (moved) onMove(event.rawY - downRawY)
-                    return true
-                }
-                MotionEvent.ACTION_UP -> {
-                    label = "按住说"
-                    invalidate()
-                    onRelease(false)
-                    performClick()
-                    return true
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    label = "按住说"
-                    invalidate()
-                    onRelease(true)
-                    return true
-                }
-            }
-            return false
-        }
-
-        override fun performClick(): Boolean {
-            super.performClick()
-            return true
-        }
-    }
 
     /** 按住说话的状态：按下位置、是否已进入取消区。 */
     private var holdStartY = 0f
@@ -1012,7 +943,15 @@ class FloatingBallService : Service() {
                 button.background = if (selected) on else null
                 button.setTextColor(if (selected) colors.onBrand else colors.secondary)
             }
-            titleView.text = TAB_TITLES[TAB_KEYS.indexOf(pageTab).coerceAtLeast(0)]
+            // 标题带上这次搜题的耗时（收完后才有），一眼能看到用了多久
+            val base = TAB_TITLES[TAB_KEYS.indexOf(pageTab).coerceAtLeast(0)]
+            val elapsed = answerElapsed[TAB_KEYS.indexOf(pageTab).coerceIn(0, 3)]
+            titleView.text = if (elapsed != null) {
+                val secs = elapsed / 1000f
+                base + if (elapsed < 10_000) " · %.1f 秒".format(secs) else " · %.0f 秒".format(secs)
+            } else {
+                base
+            }
             applyTabContent?.invoke()
         }
         tabBarRefresh = ::refreshTabs
@@ -1340,6 +1279,7 @@ class FloatingBallService : Service() {
         // 关掉整条会话：四个标签的输入与答案一起清空
         for (i in tabInputs.indices) tabInputs[i] = ""
         for (buf in answerBufs) buf.setLength(0)
+        for (i in answerElapsed.indices) answerElapsed[i] = null
         shot = null
         getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(pageView?.windowToken, 0)
         pageView?.let { runCatching { windowManager.removeView(it) } }
@@ -1365,6 +1305,9 @@ class FloatingBallService : Service() {
         }
         view.visibility = View.INVISIBLE
         pageHiddenForCapture = true
+        // 页面藏起来到截完回来看似"消失"，个把秒的空白得给个话，
+        // 不然用户以为界面挂了（取帧卡住时最多要等 10 秒的兜底）
+        Toast.makeText(this, "正在截屏…", Toast.LENGTH_SHORT).show()
     }
 
     /** 截完把页面放回来（配合 [hidePageTemporarily]）。 */
@@ -1402,6 +1345,8 @@ class FloatingBallService : Service() {
         askingBuf = sink
         askingTab = pageTab
         answerText?.text = "…"
+        // 从发出到收完的总耗时（含失败换下一套的时间）
+        val startedAt = System.currentTimeMillis()
         val shotForAsk = shot
         val sent = client.ask(
             question, shotForAsk,
@@ -1413,7 +1358,14 @@ class FloatingBallService : Service() {
             },
             onDone = { result, error ->
                 asking = false
+                // 耗时记在发起这次搜题的标签上，切回去能看见
+                answerElapsed[askingTab] = if (error == null && !result.isNullOrEmpty()) {
+                    System.currentTimeMillis() - startedAt
+                } else {
+                    null
+                }
                 flushAnswerNow()
+                tabBarRefresh?.invoke()
                 when {
                     error != null -> answerText?.text = "搜题失败：" + error.take(40)
                     result.isNullOrEmpty() -> answerText?.text = "没有收到答案"

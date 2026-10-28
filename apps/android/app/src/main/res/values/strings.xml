@@ -31,6 +31,8 @@
     <string name="solve_history_shot_only">（截图搜题）</string>
     <string name="solve_history_question_label">题目</string>
     <string name="solve_history_answer_label">答案</string>
+    <string name="solve_history_delete">删除</string>
+    <string name="solve_history_delete_confirm">删掉这条记录？截图也一起删，找不回来</string>
     <string name="solve_history_copy">复制答案</string>
     <string name="solve_history_copied">答案已复制</string>
 
@@ -122,6 +124,35 @@
     <string name="cloud_testing">测试中…</string>
     <string name="cloud_clear_key">清除密钥</string>
     <string name="cloud_note">填你自己的大模型服务；密钥加密存在手机上</string>
+    <string name="page_model_profiles">模型配置</string>
+    <string name="model_manage">管理模型配置</string>
+    <string name="model_manage_hint">可保存多套，随时切换</string>
+    <string name="model_add">添加配置</string>
+    <string name="model_edit">编辑</string>
+    <string name="model_delete">删除</string>
+    <string name="model_delete_confirm">删除「%1$s」？它的密钥也一起删掉</string>
+    <string name="model_none">还没有配置。点下面「添加配置」，或者直接在上面填地址与模型。</string>
+    <string name="model_in_use">使用中</string>
+    <string name="model_name">名称</string>
+    <string name="model_name_hint">给这套配置起个名，比如「商汤 6.8 Flash」</string>
+    <string name="model_base_url_hint">如 https://token.sensenova.cn/v1</string>
+    <string name="model_id_hint">如 sensenova-6.8-flash-lite</string>
+    <string name="model_key_hint">sk- 开头的密钥；留空表示不改</string>
+    <string name="model_save">保存</string>
+    <string name="model_cancel">取消</string>
+    <string name="cloud_fast_title">快速模式（关掉思考）</string>
+    <string name="cloud_fast_note">请求里带 reasoning_effort=none，让商汤 6.8 这类思考型模型别先想一大段再答，首字快很多；复杂题的质量可能略降。网关不认这个参数时会自动去掉重试</string>
+    <string name="cloud_failover_title">失败自动换下一套</string>
+    <string name="cloud_failover_note">这套模型报错、超时或没返回内容时，自动按列表顺序试下一套配置；已经出了半截答案就不再切换</string>
+    <string name="model_test">测试</string>
+    <string name="model_testing_short">测试中…</string>
+    <string name="model_testing">正在请求…</string>
+    <string name="model_test_ok">✓ %1$s</string>
+    <string name="model_test_fail">✗ %1$s</string>
+    <string name="model_key_empty">还没填密钥</string>
+    <string name="model_note">填的是 OpenAI 兼容接口的地址（到 /v1 为止），下面这套会自动拼 /chat/completions。密钥用 Android Keystore 加密存在本机。</string>
+    <string name="model_preset_sensenova">商汤日日新</string>
+    <string name="model_preset_deepseek">DeepSeek</string>
     <string name="cloud_predict_title">云联想与整句补全</string>
     <string name="cloud_predict_note">打拼音停一下，云端给的词和整句排在第一个候选后面，带小云朵；会产生费用，私密输入框里不用</string>
     <string name="cloud_wifi_only_title">只在 Wi-Fi 下使用</string>

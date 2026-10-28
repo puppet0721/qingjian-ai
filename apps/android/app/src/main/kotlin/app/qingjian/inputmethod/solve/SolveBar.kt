@@ -73,6 +73,13 @@ class SolveBar(
             invalidate()
         }
 
+    /** 这次搜题从发出到收完的耗时（毫秒）；没搜过或不显示为 null。 */
+    var elapsedMs: Long? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     /** [status] 是失败提示：红字。 */
     var failed = false
         set(value) {
@@ -163,10 +170,11 @@ class SolveBar(
         }
     }
 
-    /** 答案收完了：最后刷一次、状态收掉。 */
-    fun finishAsk() {
+    /** 答案收完了：最后刷一次、状态收掉，并记下这次花了多久。 */
+    fun finishAsk(elapsedMs: Long = 0L) {
         flush()
         status = null
+        this.elapsedMs = elapsedMs.takeIf { it > 0 }
     }
 
     /** 搜题失败或没配好：红字状态。 */
@@ -344,6 +352,16 @@ class SolveBar(
             statusText != null ->
                 ink.textStart(canvas, statusText, 13f, palette.gloss, answerBox.left + ink.dp(12f), answerBox.centerY(), answerBox.right - ink.dp(12f))
             else -> ink.text(canvas, "答案会显示在这里", 13.5f, palette.faint, answerBox.centerX(), answerBox.centerY())
+        }
+        // 耗时：收完后在答案区左下角标一下（小字，压在空白处，不挡正文）
+        if (formatted.isNotEmpty()) {
+            elapsedMs?.let { ms ->
+                val label = if (ms < 10_000) "用时 %.1f 秒".format(ms / 1000f) else "用时 %.0f 秒".format(ms / 1000f)
+                ink.textStart(
+                    canvas, label, 10f, palette.faint,
+                    answerBox.left + ink.dp(12f), answerBox.bottom - ink.dp(9f), answerBox.width() - ink.dp(24f),
+                )
+            }
         }
         canvas.restore()
         // 复制：答案出来后摆在答案区右上角

@@ -4,6 +4,7 @@ import android.content.Intent
 import android.view.View
 import app.qingjian.inputmethod.R
 import app.qingjian.inputmethod.cloud.CloudConfig
+import app.qingjian.inputmethod.cloud.ModelProfiles
 import app.qingjian.inputmethod.cloud.SecretStore
 import app.qingjian.inputmethod.core.store.SettingChoices
 import app.qingjian.inputmethod.core.Native
@@ -185,7 +186,16 @@ class KeyboardSettingsActivity : PageActivity() {
     /** 云端大模型：地址、模型、密钥（Keystore 加密存），测试连接与清除密钥。 */
     private fun cloudCard(): View {
         val cloud = CloudConfig.load(this)
+        val profile = ModelProfiles.active(this)
         val rows = mutableListOf(
+            // 多套配置的入口：名字 + 详情，点进去增删改与切换
+            ui.action(
+                R.string.model_manage,
+                profile?.let { "${it.name} · ${it.model}" } ?: getString(R.string.model_add),
+            ) {
+                startActivity(Intent(this, ModelProfilesActivity::class.java))
+            },
+            ui.divider(),
             ui.input(R.string.cloud_base_url, cloud.baseUrl, cloud.baseUrl, secret = false) {
                 CloudConfig.set(this, CloudConfig.KEY_BASE_URL, it.ifEmpty { CloudConfig.DEFAULT_BASE_URL })
                 testResult = null
@@ -199,7 +209,7 @@ class KeyboardSettingsActivity : PageActivity() {
             },
             ui.divider(),
             ui.input(R.string.cloud_key, cloud.keyHint ?: getString(R.string.cloud_key_empty), "", secret = true) {
-                if (it.isNotEmpty()) SecretStore.save(this, it)
+                if (it.isNotEmpty()) CloudConfig.setKey(this, it)
                 testResult = null
                 rebuild()
             },
@@ -209,10 +219,32 @@ class KeyboardSettingsActivity : PageActivity() {
         if (cloud.keyHint != null) {
             rows += ui.divider()
             rows += ui.action(R.string.cloud_clear_key, null) {
-                SecretStore.clear(this)
+                CloudConfig.clearKey(this)
                 testResult = null
                 rebuild()
             }
+        }
+        // 有多套配置时才值得给这个开关：一套挂了自动换下一套
+        if (ModelProfiles.all(this).size > 1) {
+            rows += ui.divider()
+            rows += ui.toggle(
+                R.string.cloud_failover_title,
+                R.string.cloud_failover_note,
+                ModelProfiles.failoverEnabled(this),
+            ) { on ->
+                ModelProfiles.setFailover(this, on)
+                rebuild()
+            }
+        }
+        // 快速模式：关掉思考型模型的"先想一大段再答"
+        rows += ui.divider()
+        rows += ui.toggle(
+            R.string.cloud_fast_title,
+            R.string.cloud_fast_note,
+            ModelProfiles.fastModeEnabled(this),
+        ) { on ->
+            ModelProfiles.setFastMode(this, on)
+            rebuild()
         }
         rows += ui.note(R.string.cloud_note)
         rows += ui.divider()

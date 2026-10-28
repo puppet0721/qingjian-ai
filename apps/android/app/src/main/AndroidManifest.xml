@@ -51,6 +51,7 @@
         <activity android:name=".settings.page.AboutActivity" android:exported="false" />
         <activity android:name=".settings.page.StatsActivity" android:exported="false" />
         <activity android:name=".settings.page.DictionariesActivity" android:exported="false" />
+        <activity android:name=".settings.page.ModelProfilesActivity" android:exported="false" />
         <activity android:name=".settings.page.AdvancedActivity" android:exported="false" />
         <activity android:name=".settings.page.VoiceSettingsActivity" android:exported="false" />
 

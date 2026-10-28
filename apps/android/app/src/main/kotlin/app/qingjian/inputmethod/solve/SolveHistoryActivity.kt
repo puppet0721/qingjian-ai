@@ -149,6 +149,22 @@ class SolveHistoryActivity : PageActivity() {
                 )
                 Toast.makeText(this, R.string.solve_history_copied, Toast.LENGTH_SHORT).show()
             }
+            // 删单条：清空只能整份清，想删掉某一条不想要的题得能单独删
+            .setNeutralButton(R.string.solve_history_delete) { _, _ -> confirmDelete(entry) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** 删之前问一句（删了就找不回来了）。 */
+    private fun confirmDelete(entry: SolveHistory.Entry) {
+        AlertDialog.Builder(this)
+            .setMessage(R.string.solve_history_delete_confirm)
+            .setPositiveButton(R.string.solve_history_delete) { _, _ ->
+                SolveHistory.delete(this, entry)
+                // 乐观更新：先把这个从列表里拿掉，避免等文件写完再刷
+                entries = entries?.filterNot { it.time == entry.time && it.question == entry.question }
+                rebuild()
+            }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }

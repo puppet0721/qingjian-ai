@@ -70,6 +70,36 @@ object SolveHistory {
         }.start()
     }
 
+    /**
+     * 删掉一条（连带它那张截图）。
+     * 用 time + 题目定位：同一条记录两者一起才唯一，单看时间也不怕毫秒撞车。
+     */
+    fun delete(context: Context, target: Entry) {
+        val appContext = context.applicationContext
+        Thread {
+            runCatching {
+                val kept = load(appContext).filterNot { it.time == target.time && it.question == target.question }
+                writeAll(appContext, kept)
+                target.shot?.let { runCatching { File(shotsDir(appContext), it).delete() } }
+            }
+        }.start()
+    }
+
+    /** 整份覆写（新的排最前，超 [MAX] 条丢最旧的）。 */
+    private fun writeAll(context: Context, entries: List<Entry>) {
+        val array = JSONArray()
+        entries.take(MAX).forEach { e ->
+            array.put(
+                JSONObject()
+                    .put("time", e.time)
+                    .put("q", e.question)
+                    .put("a", e.answer)
+                    .put("shot", e.shot.orEmpty()),
+            )
+        }
+        file(context).writeText(array.toString())
+    }
+
     fun shotFile(context: Context, entry: Entry): File? =
         entry.shot?.let { File(shotsDir(context), it).takeIf(File::exists) }
 

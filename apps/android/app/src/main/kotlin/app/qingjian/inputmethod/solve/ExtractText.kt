@@ -2,8 +2,7 @@ package app.qingjian.inputmethod.solve
 
 import android.content.Context
 import android.graphics.Bitmap
-import app.qingjian.inputmethod.cloud.CloudConfig
-import app.qingjian.inputmethod.cloud.SecretStore
+import app.qingjian.inputmethod.cloud.ModelProfiles
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -24,14 +23,15 @@ object ExtractText {
         shot: Bitmap,
         onDone: (text: String?, error: String?) -> Unit,
     ) {
-        val config = CloudConfig.load(context)
-        if (!config.ready) {
+        // 与搜题共用同一条模型链（含失败换下一套）。
+        // 之前这里读的是 SecretStore 的旧密钥槽，多配置之后必然 401——
+        // 「config 说配好了、实际发出去是空密钥」。
+        val chain = ModelProfiles.chain(context)
+        if (chain.isEmpty()) {
             onDone(null, "先在「键盘设置 → 云端大模型」里填好接口和密钥")
             return
         }
-        val apiKey = SecretStore.load(context).orEmpty()
         val body = JSONObject()
-            .put("model", config.model)
             .put(
                 "messages",
                 JSONArray()
@@ -53,13 +53,28 @@ object ExtractText {
         Thread {
             var result: String? = null
             var failure: String? = null
-            try {
-                result = request(config.baseUrl, apiKey, body)
-            } catch (e: Exception) {
-                failure = e.message ?: e.javaClass.simpleName
+            var tried = 0
+            for ((profile, apiKey) in chain) {
+                tried++
+                try {
+                    result = request(
+                        profile.baseUrl,
+                        apiKey,
+                        JSONObject(body.toString()).put("model", profile.model),
+                    )
+                    if (!result.isNullOrBlank()) break
+                    failure = "「${profile.model}」没有返回内容"
+                    result = null
+                } catch (e: Exception) {
+                    failure = "${profile.model}：${e.message ?: e.javaClass.simpleName}"
+                }
             }
             val text = result
-            val error = failure
+            val error = if (text == null) {
+                (failure ?: "提取失败") + if (tried > 1) "（已试过 $tried 套配置）" else ""
+            } else {
+                null
+            }
             android.os.Handler(android.os.Looper.getMainLooper()).post { onDone(text, error) }
         }.start()
     }

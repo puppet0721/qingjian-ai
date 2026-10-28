@@ -20,15 +20,21 @@ class SolveFlow(private val context: Context, private val client: SolveClient) {
     fun ask(question: String) {
         stop()
         bar?.beginAsk()
+        // 从发出到最后一个字收完的总耗时（含失败换下一套的时间）
+        val startedAt = System.currentTimeMillis()
         val sent = client.ask(
             question, shot,
             onDelta = { delta -> bar?.appendAnswer(delta) },
             onDone = { result, error ->
+                val elapsed = System.currentTimeMillis() - startedAt
                 when {
-                    error != null -> bar?.fail("搜题失败：${error.take(40)}")
+                    error != null -> {
+                        bar?.elapsedMs = null
+                        bar?.fail("搜题失败：${error.take(40)}")
+                    }
                     result.isNullOrEmpty() -> bar?.fail("没有收到答案")
                     else -> {
-                        bar?.finishAsk()
+                        bar?.finishAsk(elapsed)
                         SolveHistory.record(context, question, result, shot)
                     }
                 }
